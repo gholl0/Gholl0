@@ -97,26 +97,122 @@ class TSPSolver:
 	def branchAndBound( self, time_allowance=60.0 ):
 		bssf = self.defaultRandomTour()["soln"]
 		matrix = self.makeMatrix()
-		ogState = self.reduceMatrix(matrix)
+		self.lower_bound = 0
+		self.state_count = 0
+		count = 0
+		mockState = State(self.state_count, matrix, self.lower_bound, [])
+		ogState = self.reduceMatrix(mockState, self.state_count)
+		self.state_count += 1
+		heap = []
+		heapq.heappush(heap, ogState)
+		start_time = time.time()
+		results = {}
 
+		#This will now continue till I find the tour that is better then the BSSF or the time is up
+		self.pruned = 0
+		self.heapSize = 0
+		while time.time() - start_time < time_allowance and len(heap) != 0:
+			#Checks the largest the heap gets
+			if len(heap) > self.heapSize:
+				self.heapSize = len(heap)
+
+			popState = heapq.heappop(heap)
+			if popState.lowerBound >= bssf.cost:
+				self.pruned += 1
+				continue
+
+			#Now I start looping through and generating children for the popped state
+			if popState.lowerBound < bssf.cost and len(popState.path) == self.ncities:
+				bssf = TSPSolution(self.getCities(popState.path))
+				count += 1
+			for i in range(self.ncities):
+				if i in popState.path:
+					continue
+				childState = self.generateState(popState, i)
+
+				if childState.lowerBound < bssf.cost:
+					heapq.heappush(heap, childState)
+				else:
+					self.pruned += 1
+
+		end_time = time.time()
+
+		#Preps the return data
+		results['cost'] = bssf.cost
+		results['time'] = end_time - start_time
+		results['count'] = count
+		results['soln'] = bssf
+		results['max'] = self.heapSize
+		results['total'] = self.state_count
+		results['pruned'] = self.pruned
+
+		return results
 
 	def makeMatrix(self):
 		cities = self._scenario.getCities()
-		ncities = len(cities)
+		self.ncities = len(self._scenario.getCities())
 		arr = []
-		for i in range(ncities):
+		for i in range(self.ncities):
 			row = []
-			for j in range(ncities):
+			for j in range(self.ncities):
 				dist = cities[i].costTo(cities[j])
 				row.append(dist)
 			arr.append(row)
 		return np.array(arr)
 
-	def reduceMatrix(self, matrix):
-		ncities = len(self._scenario.getCities())
-		#Go through rows first
-		for i in range(ncities):
+	def reduceMatrix(self, state, nextStateNum):
+		lowerBound = state.lowerBound
+		matrix = state.mtx.copy()
+		path = state.path.copy()
+		#Go through rows first then columns
+		for i in range(2):
+			for j in range(self.ncities):
+				if i == 0:
+					toEdit = matrix[j]
+				else:
+					toEdit = matrix[:,j]
+				eMin = min(toEdit)
+				if eMin == np.inf or eMin == 0:
+					continue
+				edited = toEdit - eMin
+				lowerBound += eMin
+				if i == 0:
+					matrix[j] = edited
+				else:
+					matrix[:,j] = edited
+		if self.lower_bound == 0:
+			self.lower_bound = lowerBound
+			stateCount = self.state_count
+		else:
+			stateCount = nextStateNum
+		path.append(stateCount)
+		state = State(stateCount, matrix, lowerBound, path)
+		return state
 
+	def generateState(self, state, nextStateNum):
+		matrix = state.mtx.copy()
+		lowerBound = state.lowerBound
+
+		#Here I will add the cost of new edge
+		lowerBound += matrix[state.path[-1], nextStateNum]
+		matrix[nextStateNum, state.path[-1]] = np.inf
+
+		#Here I set up the infinity rows, columns and edge
+		infArray = np.full(self.ncities, np.inf)
+		matrix[state.path[-1]] = infArray
+		matrix[:,nextStateNum] = infArray
+		childState = State(nextStateNum,matrix,lowerBound,state.path)
+		childState = self.reduceMatrix(childState,nextStateNum)
+		self.state_count += 1
+
+
+		return childState
+
+	def getCities(self, path):
+		route = []
+		for i in path:
+			route.append(self._scenario.getCities()[i])
+		return route
 
 	''' <summary>
 		This is the entry point for the algorithm you'll write for your group project.
